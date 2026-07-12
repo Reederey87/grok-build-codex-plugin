@@ -18,39 +18,39 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function makeVersionFixture() {
+function makeVersionFixture({ withPluginJson = true } = {}) {
   const root = makeTempDir();
 
   writeJson(path.join(root, "package.json"), {
-    name: "@openai/codex-plugin-cc",
+    name: "grok-build-codex-plugin",
     version: "1.0.2"
   });
   writeJson(path.join(root, "package-lock.json"), {
-    name: "@openai/codex-plugin-cc",
+    name: "grok-build-codex-plugin",
     version: "1.0.2",
     lockfileVersion: 3,
     packages: {
       "": {
-        name: "@openai/codex-plugin-cc",
+        name: "grok-build-codex-plugin",
+        version: "1.0.2"
+      },
+      "mcp-server": {
+        name: "grok-build-mcp",
         version: "1.0.2"
       }
     }
   });
-  writeJson(path.join(root, "plugins", "codex", ".claude-plugin", "plugin.json"), {
-    name: "codex",
+  writeJson(path.join(root, "mcp-server", "package.json"), {
+    name: "grok-build-mcp",
     version: "1.0.2"
   });
-  writeJson(path.join(root, ".claude-plugin", "marketplace.json"), {
-    metadata: {
+
+  if (withPluginJson) {
+    writeJson(path.join(root, ".codex-plugin", "plugin.json"), {
+      name: "grok-build",
       version: "1.0.2"
-    },
-    plugins: [
-      {
-        name: "codex",
-        version: "1.0.2"
-      }
-    ]
-  });
+    });
+  }
 
   return root;
 }
@@ -66,15 +66,15 @@ test("bump-version updates every release manifest", () => {
   assert.equal(readJson(path.join(root, "package.json")).version, "1.2.3");
   assert.equal(readJson(path.join(root, "package-lock.json")).version, "1.2.3");
   assert.equal(readJson(path.join(root, "package-lock.json")).packages[""].version, "1.2.3");
-  assert.equal(readJson(path.join(root, "plugins", "codex", ".claude-plugin", "plugin.json")).version, "1.2.3");
-  assert.equal(readJson(path.join(root, ".claude-plugin", "marketplace.json")).metadata.version, "1.2.3");
-  assert.equal(readJson(path.join(root, ".claude-plugin", "marketplace.json")).plugins[0].version, "1.2.3");
+  assert.equal(readJson(path.join(root, "package-lock.json")).packages["mcp-server"].version, "1.2.3");
+  assert.equal(readJson(path.join(root, "mcp-server", "package.json")).version, "1.2.3");
+  assert.equal(readJson(path.join(root, ".codex-plugin", "plugin.json")).version, "1.2.3");
 });
 
 test("bump-version check mode reports stale metadata", () => {
   const root = makeVersionFixture();
   writeJson(path.join(root, "package.json"), {
-    name: "@openai/codex-plugin-cc",
+    name: "grok-build-codex-plugin",
     version: "1.0.3"
   });
 
@@ -83,6 +83,29 @@ test("bump-version check mode reports stale metadata", () => {
   });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /plugins\/codex\/\.claude-plugin\/plugin\.json version/);
-  assert.match(result.stderr, /\.claude-plugin\/marketplace\.json metadata\.version/);
+  assert.match(result.stderr, /mcp-server\/package\.json version/);
+  assert.match(result.stderr, /\.codex-plugin\/plugin\.json version/);
+});
+
+test("bump-version tolerates a missing .codex-plugin/plugin.json on bump", () => {
+  const root = makeVersionFixture({ withPluginJson: false });
+
+  const result = run("node", [SCRIPT, "--root", root, "1.2.3"], {
+    cwd: ROOT
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Skipping \.codex-plugin\/plugin\.json/);
+  assert.equal(readJson(path.join(root, "package.json")).version, "1.2.3");
+  assert.equal(fs.existsSync(path.join(root, ".codex-plugin", "plugin.json")), false);
+});
+
+test("bump-version check mode passes when .codex-plugin/plugin.json is absent", () => {
+  const root = makeVersionFixture({ withPluginJson: false });
+
+  const result = run("node", [SCRIPT, "--root", root, "--check", "1.0.2"], {
+    cwd: ROOT
+  });
+
+  assert.equal(result.status, 0, result.stderr);
 });
