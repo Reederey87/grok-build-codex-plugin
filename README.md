@@ -24,16 +24,20 @@ Codex session → grok-build-delegate skill routes → MCP tools → local `grok
 
 ```
 npm install
-codex plugin marketplace add /path/to/grok-build-codex-plugin/dev/marketplace
+codex plugin marketplace add /path/to/grok-build-codex-plugin
+codex plugin add grok-build@grok-build-dev
 ```
 
-Then enable the `grok-build` plugin from the marketplace listing.
+The repository root doubles as the marketplace (`.agents/plugins/marketplace.json`).
+Run `npm install` before adding it — the MCP server needs `@modelcontextprotocol/sdk`
+at runtime and the plugin is cached with its `node_modules`.
 
-If `${PLUGIN_ROOT}` fails to resolve in `.mcp.json` (upstream bugs
-[openai/codex#22842](https://github.com/openai/codex/issues/22842) and
+Verified on codex-cli 0.144.1: `${PLUGIN_ROOT}` in `.mcp.json` resolves correctly. If you
+hit the older resolution bugs
+([openai/codex#22842](https://github.com/openai/codex/issues/22842),
 [openai/codex#22105](https://github.com/openai/codex/issues/22105)), declare the
-`grok-build` MCP server with an absolute path directly in `~/.codex/config.toml` instead of
-relying on plugin-relative resolution. See [`dev/README.md`](dev/README.md).
+`grok-build` MCP server with an absolute path directly in `~/.codex/config.toml` instead.
+See [`dev/README.md`](dev/README.md).
 
 ## Tools
 

@@ -1,14 +1,19 @@
 # Local dev install
 
-Install for local development with:
+The repository root doubles as a Codex plugin marketplace
+(`.agents/plugins/marketplace.json`), so installing the checkout is two commands:
 
 ```
-codex plugin marketplace add /Users/reederey/Developer/plugins/grok-build-codex-plugin/dev/marketplace
+codex plugin marketplace add /path/to/grok-build-codex-plugin
+codex plugin add grok-build@grok-build-dev
 ```
 
-Then enable the `grok-build` plugin from the marketplace listing.
+Run `npm install` in the checkout first — the plugin is cached with its
+`node_modules`, and the MCP server needs `@modelcontextprotocol/sdk` at runtime.
 
-If `${PLUGIN_ROOT}` fails to resolve in `.mcp.json` (see open upstream bugs
-openai/codex#22842 and openai/codex#22105), work around it by declaring the
-`grok-build` MCP server with an absolute path directly in `~/.codex/config.toml`
-instead of relying on plugin-relative resolution.
+Verified on codex-cli 0.144.1: `${PLUGIN_ROOT}` in `.mcp.json` resolves correctly,
+so the bundled MCP server starts without extra configuration. If you hit the older
+resolution bugs (openai/codex#22842, #22105), declare the `grok-build` MCP server
+with an absolute path directly in `~/.codex/config.toml` instead.
+
+A per-tool approval policy for testing lives in [`config-snippet.toml`](config-snippet.toml).
