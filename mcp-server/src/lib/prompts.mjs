@@ -12,7 +12,7 @@
  */
 export function readOnlyPrompt(userPrompt, purpose) {
   return [
-    "You are Grok Build invoked by a Claude Code plugin.",
+    "You are Grok Build invoked by a Codex CLI plugin bridge.",
     `Purpose: ${purpose}.`,
     "This is a strictly read-only task. Do not create, edit, delete, rename, stage, commit, reset, checkout, or otherwise mutate files or Git state.",
     "Use only permitted read operations and Git inspection. Do not inspect dotfiles, credentials, environment files, keychains, or secrets.",
@@ -31,7 +31,7 @@ export function readOnlyPrompt(userPrompt, purpose) {
  */
 export function writePrompt(userPrompt) {
   return [
-    "You are Grok Build invoked by a Claude Code plugin.",
+    "You are Grok Build invoked by a Codex CLI plugin bridge.",
     "Purpose: implement a bounded, predefined task in the current Git workspace.",
     "Make only the changes required by the user's request. Do not inspect dotfiles, credentials, environment files, keychains, or secrets.",
     "Do not invoke this plugin, its companion script, Claude Code slash commands, or another Grok session.",
@@ -49,7 +49,7 @@ export function writePrompt(userPrompt) {
  */
 export function reviewPrompt(context) {
   return [
-    "You are Grok Build acting as an external read-only code reviewer.",
+    "You are Grok Build invoked by a Codex CLI plugin bridge.",
     "Do not modify files or Git state. Do not inspect dotfiles, credentials, environment files, keychains, or secrets.",
     "Do not invoke this plugin, its companion script, Claude Code slash commands, or another Grok session.",
     "Review for correctness, security, data loss, races, regressions, and missing tests.",
