@@ -7,7 +7,7 @@ open-ended problems. Delegate work that is **well-defined**; keep judgment calls
 
 | Task | Tool | Example prompt |
 | --- | --- | --- |
-| Implementing a **written plan** — spec'd fixes, mechanical/bulk edits, boilerplate | `grok_build_task` (`write: true`, gated) | "Use Grok Build to implement the fix described in plan.md. Write mode allowed." |
+| Implementing a **written plan** — spec'd fixes, mechanical/bulk edits, boilerplate | `grok_build_task` (`write: true`, gated) | "Use Grok Build to implement the fix described in plan prepeared by Codex. Write mode allowed." |
 | **Code review** / second opinion on a diff or branch | `grok_build_review` | "Use Grok Build to review my working tree." / "…adversarial review of this branch against main." |
 | Repo questions, quick investigations, root-cause reading | `grok_build_prompt`, `grok_build_task` (read-only) | "Ask Grok Build why the parser tests fail. Read-only." |
 

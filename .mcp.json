@@ -1,7 +1,7 @@
 {
   "grok-build": {
-    "command": "node",
-    "args": ["${PLUGIN_ROOT}/mcp-server/src/server.mjs"],
+    "command": "/bin/sh",
+    "args": ["${PLUGIN_ROOT}/mcp-server/bin/grok-build-mcp"],
     "env": {
       "GROK_BUILD_API_FALLBACK": "false"
     }

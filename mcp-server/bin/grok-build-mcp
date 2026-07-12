@@ -1,0 +1,56 @@
+#!/bin/sh
+# Locates a node binary and execs the grok-build MCP server with it.
+#
+# Codex can launch the bundled MCP server with a minimal PATH (e.g. GUI/launchd
+# contexts), which drops "command": "node" before the server ever emits an
+# initialize response. This launcher finds node itself instead of relying on
+# the caller's PATH.
+set -eu
+
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+node_bin=""
+
+if [ -n "${GROK_BUILD_NODE:-}" ]; then
+  if [ -x "$GROK_BUILD_NODE" ]; then
+    node_bin="$GROK_BUILD_NODE"
+  else
+    echo "grok-build-mcp: GROK_BUILD_NODE is set to '$GROK_BUILD_NODE' but it is not executable" >&2
+    exit 127
+  fi
+fi
+
+if [ -z "$node_bin" ]; then
+  found=$(command -v node 2>/dev/null || true)
+  if [ -n "$found" ]; then
+    node_bin="$found"
+  fi
+fi
+
+if [ -z "$node_bin" ]; then
+  for candidate in /opt/homebrew/bin/node /usr/local/bin/node /opt/homebrew/opt/node/bin/node /usr/bin/node; do
+    if [ -x "$candidate" ]; then
+      node_bin="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$node_bin" ] && [ -d "${HOME:-}/.nvm/versions/node" ]; then
+  latest=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n 1 || true)
+  if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/node" ]; then
+    node_bin="$HOME/.nvm/versions/node/$latest/bin/node"
+  fi
+fi
+
+if [ -z "$node_bin" ]; then
+  echo "grok-build-mcp: cannot find a node binary; install Node >= 18.18 or set GROK_BUILD_NODE=/path/to/node" >&2
+  exit 127
+fi
+
+# The server spawns `grok` (and `git`) via PATH; minimal launch environments
+# (GUI/launchd) miss common install dirs, so augment PATH before exec.
+PATH="$(dirname -- "$node_bin"):$PATH:/opt/homebrew/bin:/usr/local/bin:${HOME:-/nonexistent}/.grok/bin:${HOME:-/nonexistent}/.local/bin"
+export PATH
+
+exec "$node_bin" "$dir/../src/server.mjs" "$@"

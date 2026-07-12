@@ -26,18 +26,27 @@ Codex session → grok-build-delegate skill routes → MCP tools → local `grok
 npm install
 codex plugin marketplace add /path/to/grok-build-codex-plugin
 codex plugin add grok-build@grok-build-dev
+node scripts/install-codex-config.mjs
 ```
 
 The repository root doubles as the marketplace (`.agents/plugins/marketplace.json`).
 Run `npm install` before adding it — the MCP server needs `@modelcontextprotocol/sdk`
-at runtime and the plugin is cached with its `node_modules`.
+at runtime and the plugin is cached with its `node_modules`. `codex plugin add` is still
+needed to register the `grok-build-delegate` skill.
 
-Verified on codex-cli 0.144.1: `${PLUGIN_ROOT}` in `.mcp.json` resolves correctly. If you
-hit the older resolution bugs
-([openai/codex#22842](https://github.com/openai/codex/issues/22842),
-[openai/codex#22105](https://github.com/openai/codex/issues/22105)), declare the
-`grok-build` MCP server with an absolute path directly in `~/.codex/config.toml` instead.
-See [`dev/README.md`](dev/README.md).
+The last step, `node scripts/install-codex-config.mjs`, installs the MCP server itself. On
+codex-cli 0.144.1, `${PLUGIN_ROOT}` in `.mcp.json` does **not** resolve when Codex's session
+cwd is outside this checkout ([openai/codex#22842](https://github.com/openai/codex/issues/22842)),
+so relying on `.mcp.json` alone leaves the server unreachable from other repos. The installer
+writes an absolute-path `[mcp_servers.grok-build]` entry to `~/.codex/config.toml` (or
+`$CODEX_HOME/config.toml`) instead — reliable regardless of session cwd. `.mcp.json` stays in
+the repo for when upstream fixes resolution. Run `node scripts/install-codex-config.mjs
+--remove` to uninstall; see [`dev/README.md`](dev/README.md) for the full flag reference.
+
+Codex sometimes launches plugin MCP servers with a minimal PATH (e.g. GUI/launchd
+contexts), where a bare `node` command isn't found. The installed config runs the server
+through a bundled launcher (`mcp-server/bin/grok-build-mcp`) that locates node in common
+install locations on its own; set `GROK_BUILD_NODE=/path/to/node` to force a specific binary.
 
 ## Tools
 
@@ -70,6 +79,7 @@ Environment variables read by the MCP server:
 | `XAI_API_KEY` | xAI API key. Required for the API fallback. |
 | `GROK_BUILD_XAI_BASE_URL` | xAI API base URL. Defaults to `https://api.x.ai/v1`. |
 | `GROK_BUILD_XAI_TIMEOUT_MS` | xAI API request timeout in ms. Defaults to `120000`. |
+| `GROK_BUILD_NODE` | Absolute path to a node binary for the bundled launcher to use, bypassing its own PATH search. |
 
 Codex's own sandbox and approval policy governs applying any patch Grok proposes. A
 per-tool approval snippet for `~/.codex/config.toml` lives in
