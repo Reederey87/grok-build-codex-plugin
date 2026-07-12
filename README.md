@@ -101,6 +101,8 @@ only when explicitly requested. Each write job captures `git status` before and 
 run as evidence, so you can see exactly what changed. Applying anything further still goes
 through Codex's normal edit/approval flow.
 
+See [USAGE.md](USAGE.md) for concise criteria on what to delegate to Grok versus keep in Codex.
+
 ## Try it
 
 Once the plugin is enabled, ask Codex:
