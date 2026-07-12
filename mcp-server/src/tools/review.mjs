@@ -11,6 +11,26 @@ import { reviewPrompt } from "../lib/prompts.mjs";
 import { errorContent, executeModelRequest, jsonContent } from "./shared.mjs";
 
 const INLINE_REVIEW_LIMIT = 60 * 1024;
+const REVIEW_INPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Best-effort removal of review-input files older than a week. @param {string} reviewDir */
+function pruneStaleReviewInputs(reviewDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(reviewDir);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - REVIEW_INPUT_MAX_AGE_MS;
+  for (const entry of entries) {
+    const entryPath = path.join(reviewDir, entry);
+    try {
+      if (fs.statSync(entryPath).mtimeMs < cutoff) fs.unlinkSync(entryPath);
+    } catch {
+      // Best effort: a vanished or locked file must not fail the review.
+    }
+  }
+}
 
 export const inputSchema = z.object({
   cwd: z.string(),
@@ -31,6 +51,7 @@ export async function handler(rawInput) {
       const stateRoot = process.env.GROK_BUILD_PLUGIN_DATA || path.join(os.tmpdir(), "grok-build-mcp");
       const reviewDir = path.join(stateRoot, "review-inputs");
       fs.mkdirSync(reviewDir, { recursive: true });
+      pruneStaleReviewInputs(reviewDir);
       const reviewPath = path.join(reviewDir, `${randomUUID()}.md`);
       fs.writeFileSync(reviewPath, content, "utf8");
       content = `The review context is too large to inline. Read the review input at ${reviewPath}. Do not modify that file.`;

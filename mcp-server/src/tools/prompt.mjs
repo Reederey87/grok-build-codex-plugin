@@ -8,7 +8,6 @@ export const inputSchema = z.object({
   cwd: z.string(),
   prompt: z.string().min(1),
   model: z.string().min(1).optional(),
-  output_format: z.enum(["json", "text"]).optional(),
   allow_api_fallback: z.boolean().optional(),
   timeout_ms: z.number().int().positive().optional(),
   session_id: z.string().min(1).optional(),
