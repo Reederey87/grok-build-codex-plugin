@@ -1,20 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import {
-  listJobs as listCodexJobs,
-  resolveJobFile,
-  resolveJobLogFile,
-  resolveStateDir,
-  resolveStateFile,
-  saveState,
-  upsertJob
-} from "../plugins/codex/scripts/lib/state.mjs";
 import {
   acquireWriteLock,
   createJob,
@@ -23,13 +13,10 @@ import {
   resolveJobsDir,
   resolveWriteLockDir,
   writeJob
-} from "../plugins/grok/scripts/lib/state.mjs";
-import { resolveWorkspace } from "../plugins/grok/scripts/lib/workspace.mjs";
-import { ensureGitRepository } from "../plugins/codex/scripts/lib/git.mjs";
+} from "../mcp-server/src/lib/state.mjs";
+import { resolveWorkspace } from "../mcp-server/src/lib/workspace.mjs";
 
-delete process.env.CLAUDE_PLUGIN_DATA;
-delete process.env.CODEX_COMPANION_SESSION_ID;
-delete process.env.CODEX_COMPANION_TRANSCRIPT_PATH;
+delete process.env.GROK_BUILD_PLUGIN_DATA;
 
 function realpath(p) {
   return fs.realpathSync.native(p);
@@ -53,107 +40,10 @@ function makeLinkedWorktreePair() {
   };
 }
 
-test("resolveStateDir uses a temp-backed per-workspace directory", () => {
-  const workspace = makeTempDir();
-  const stateDir = resolveStateDir(workspace);
-
-  assert.equal(stateDir.startsWith(os.tmpdir()), true);
-  assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-  assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-});
-
-test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
-  const workspace = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
-
-  try {
-    const stateDir = resolveStateDir(workspace);
-
-    assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state")), true);
-    assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-    assert.match(
-      stateDir,
-      new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
-    );
-  } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
-    }
-  }
-});
-
-test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {
-  const workspace = makeTempDir();
-  const stateFile = resolveStateFile(workspace);
-  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-
-  const jobs = Array.from({ length: 51 }, (_, index) => {
-    const jobId = `job-${index}`;
-    const updatedAt = new Date(Date.UTC(2026, 0, 1, 0, index, 0)).toISOString();
-    const logFile = resolveJobLogFile(workspace, jobId);
-    const jobFile = resolveJobFile(workspace, jobId);
-    fs.writeFileSync(logFile, `log ${jobId}\n`, "utf8");
-    fs.writeFileSync(jobFile, JSON.stringify({ id: jobId, status: "completed" }, null, 2), "utf8");
-    return {
-      id: jobId,
-      status: "completed",
-      logFile,
-      updatedAt,
-      createdAt: updatedAt
-    };
-  });
-
-  fs.writeFileSync(
-    stateFile,
-    `${JSON.stringify(
-      {
-        version: 1,
-        config: { stopReviewGate: false },
-        jobs
-      },
-      null,
-      2
-    )}\n`,
-    "utf8"
-  );
-
-  saveState(workspace, {
-    version: 1,
-    config: { stopReviewGate: false },
-    jobs
-  });
-
-  const prunedJobFile = resolveJobFile(workspace, "job-0");
-  const prunedLogFile = resolveJobLogFile(workspace, "job-0");
-  const retainedJobFile = resolveJobFile(workspace, "job-50");
-  const retainedLogFile = resolveJobLogFile(workspace, "job-50");
-  const jobsDir = path.dirname(prunedJobFile);
-
-  assert.equal(fs.existsSync(retainedJobFile), true);
-  assert.equal(fs.existsSync(retainedLogFile), true);
-
-  const savedState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  assert.equal(savedState.jobs.length, 50);
-  assert.deepEqual(
-    savedState.jobs.map((job) => job.id),
-    Array.from({ length: 50 }, (_, index) => `job-${50 - index}`)
-  );
-  assert.deepEqual(
-    fs.readdirSync(jobsDir).sort(),
-    Array.from({ length: 50 }, (_, index) => `job-${index + 1}`)
-      .flatMap((jobId) => [`${jobId}.json`, `${jobId}.log`])
-      .sort()
-  );
-});
-
 test("grok jobs created in a linked worktree are visible from the main checkout and vice versa", () => {
   const pluginData = makeTempDir("grok-plugin-data-");
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginData;
+  const previous = process.env.GROK_BUILD_PLUGIN_DATA;
+  process.env.GROK_BUILD_PLUGIN_DATA = pluginData;
   const pair = makeLinkedWorktreePair();
   try {
     const fromWorktree = writeJob(pair.worktree, createJob("task", pair.worktree, { summary: "from-wt" }));
@@ -173,17 +63,17 @@ test("grok jobs created in a linked worktree are visible from the main checkout 
   } finally {
     pair.dispose();
     if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+      delete process.env.GROK_BUILD_PLUGIN_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
+      process.env.GROK_BUILD_PLUGIN_DATA = previous;
     }
   }
 });
 
 test("grok write locks are distinct across linked worktrees", () => {
   const pluginData = makeTempDir("grok-lock-data-");
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginData;
+  const previous = process.env.GROK_BUILD_PLUGIN_DATA;
+  process.env.GROK_BUILD_PLUGIN_DATA = pluginData;
   const pair = makeLinkedWorktreePair();
   try {
     const mainJob = writeJob(pair.main, createJob("task", pair.main));
@@ -205,17 +95,17 @@ test("grok write locks are distinct across linked worktrees", () => {
   } finally {
     pair.dispose();
     if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+      delete process.env.GROK_BUILD_PLUGIN_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
+      process.env.GROK_BUILD_PLUGIN_DATA = previous;
     }
   }
 });
 
 test("grok listJobs merges legacy worktree-keyed job files without modifying them", () => {
   const pluginData = makeTempDir("grok-legacy-data-");
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginData;
+  const previous = process.env.GROK_BUILD_PLUGIN_DATA;
+  process.env.GROK_BUILD_PLUGIN_DATA = pluginData;
   const pair = makeLinkedWorktreePair();
   try {
     const legacyHash = createHash("sha256").update(pair.worktree).digest("hex").slice(0, 32);
@@ -249,99 +139,17 @@ test("grok listJobs merges legacy worktree-keyed job files without modifying the
   } finally {
     pair.dispose();
     if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+      delete process.env.GROK_BUILD_PLUGIN_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
-    }
-  }
-});
-
-test("codex jobs created in a linked worktree are visible from the main checkout", () => {
-  const pluginData = makeTempDir("codex-plugin-data-");
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginData;
-  const pair = makeLinkedWorktreePair();
-  try {
-    upsertJob(pair.worktree, {
-      id: "job-from-wt",
-      status: "completed",
-      kind: "task",
-      summary: "worktree job"
-    });
-    upsertJob(pair.main, {
-      id: "job-from-main",
-      status: "completed",
-      kind: "review",
-      summary: "main job"
-    });
-
-    assert.equal(resolveStateDir(pair.main), resolveStateDir(pair.worktree));
-    const fromMain = listCodexJobs(pair.main).map((job) => job.id).sort();
-    const fromWorktree = listCodexJobs(pair.worktree).map((job) => job.id).sort();
-    assert.deepEqual(fromMain, ["job-from-main", "job-from-wt"]);
-    assert.deepEqual(fromWorktree, fromMain);
-  } finally {
-    pair.dispose();
-    if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
-    }
-  }
-});
-
-test("codex loadState reads legacy show-toplevel-keyed state without modifying it", () => {
-  const pluginData = makeTempDir("codex-legacy-data-");
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginData;
-  const pair = makeLinkedWorktreePair();
-  try {
-    const legacyHash = createHash("sha256").update(pair.worktree).digest("hex").slice(0, 16);
-    const slug = path.basename(pair.worktree).replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
-    const legacyDir = path.join(pluginData, "state", `${slug}-${legacyHash}`);
-    fs.mkdirSync(path.join(legacyDir, "jobs"), { recursive: true });
-    const legacyState = {
-      version: 1,
-      config: { stopReviewGate: false },
-      jobs: [
-        {
-          id: "legacy-job-1",
-          status: "completed",
-          kind: "task",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-          createdAt: "2026-01-01T00:00:00.000Z"
-        }
-      ]
-    };
-    const legacyFile = path.join(legacyDir, "state.json");
-    fs.writeFileSync(legacyFile, `${JSON.stringify(legacyState, null, 2)}\n`, "utf8");
-    const before = fs.readFileSync(legacyFile, "utf8");
-    const mtimeBefore = fs.statSync(legacyFile).mtimeMs;
-
-    // Shared-root state dir has no state.json; listing from the worktree should surface legacy jobs.
-    assert.equal(fs.existsSync(resolveStateFile(pair.worktree)), false);
-    const jobs = listCodexJobs(pair.worktree);
-    assert.deepEqual(
-      jobs.map((job) => job.id),
-      ["legacy-job-1"]
-    );
-
-    assert.equal(fs.readFileSync(legacyFile, "utf8"), before);
-    assert.equal(fs.statSync(legacyFile).mtimeMs, mtimeBefore);
-  } finally {
-    pair.dispose();
-    if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
+      process.env.GROK_BUILD_PLUGIN_DATA = previous;
     }
   }
 });
 
 test("non-worktree repos keep the same grok jobs dir key as before (shared === toplevel)", () => {
   const pluginData = makeTempDir("grok-key-stable-");
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginData;
+  const previous = process.env.GROK_BUILD_PLUGIN_DATA;
+  process.env.GROK_BUILD_PLUGIN_DATA = pluginData;
   const cwd = makeTempDir("plain-repo-");
   initGitRepo(cwd);
   fs.writeFileSync(path.join(cwd, "a.js"), "1\n");
@@ -355,35 +163,9 @@ test("non-worktree repos keep the same grok jobs dir key as before (shared === t
     assert.equal(sharedDir, expectedLegacy);
   } finally {
     if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+      delete process.env.GROK_BUILD_PLUGIN_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
-    }
-  }
-});
-
-test("non-worktree repos keep the same codex state dir key as before (shared === toplevel)", () => {
-  const pluginData = makeTempDir("codex-key-stable-");
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginData;
-  const cwd = makeTempDir("plain-repo-");
-  initGitRepo(cwd);
-  fs.writeFileSync(path.join(cwd, "a.js"), "1\n");
-  run("git", ["add", "a.js"], { cwd });
-  run("git", ["commit", "-m", "init"], { cwd });
-
-  try {
-    const toplevel = ensureGitRepository(cwd);
-    const canonical = fs.realpathSync.native(toplevel);
-    const slug = path.basename(toplevel).replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
-    const hash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
-    const expectedLegacy = path.join(pluginData, "state", `${slug}-${hash}`);
-    assert.equal(resolveStateDir(cwd), expectedLegacy);
-  } finally {
-    if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
+      process.env.GROK_BUILD_PLUGIN_DATA = previous;
     }
   }
 });

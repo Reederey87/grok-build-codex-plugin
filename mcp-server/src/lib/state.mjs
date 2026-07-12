@@ -6,8 +6,8 @@ import path from "node:path";
 import { isProcessAlive } from "./process.mjs";
 import { resolveSharedWorkspace, resolveWorkspace } from "./workspace.mjs";
 
-const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-const FALLBACK_ROOT = path.join(os.tmpdir(), "grok-companion");
+const PLUGIN_DATA_ENV = "GROK_BUILD_PLUGIN_DATA";
+const FALLBACK_ROOT = path.join(os.tmpdir(), "grok-build-mcp");
 const JOB_ID_PATTERN = /^grok-(?:ask|review|task)-[a-z0-9-]+$/;
 
 function nowIso() {

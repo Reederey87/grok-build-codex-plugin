@@ -83,7 +83,7 @@ function normalizedModel(value) {
 }
 
 export function resolveModel(explicitModel, env = process.env) {
-  return normalizedModel(explicitModel) ?? normalizedModel(env.CLAUDE_PLUGIN_OPTION_DEFAULT_MODEL) ?? CLI_DEFAULT_MODEL;
+  return normalizedModel(explicitModel) ?? normalizedModel(env.GROK_BUILD_DEFAULT_MODEL) ?? CLI_DEFAULT_MODEL;
 }
 
 function normalizedString(value) {
@@ -92,7 +92,7 @@ function normalizedString(value) {
 }
 
 export function resolveEffort(explicitEffort, env = process.env) {
-  return normalizedString(explicitEffort) ?? normalizedString(env.CLAUDE_PLUGIN_OPTION_DEFAULT_EFFORT) ?? null;
+  return normalizedString(explicitEffort) ?? normalizedString(env.GROK_BUILD_DEFAULT_EFFORT) ?? null;
 }
 
 function parsePositiveInteger(value) {
@@ -115,7 +115,7 @@ export function resolveMaxTurns(explicitMaxTurns, env = process.env) {
     }
     return parsed;
   }
-  const parsedEnv = parsePositiveInteger(env.CLAUDE_PLUGIN_OPTION_DEFAULT_MAX_TURNS);
+  const parsedEnv = parsePositiveInteger(env.GROK_BUILD_DEFAULT_MAX_TURNS);
   return parsedEnv === undefined ? null : parsedEnv;
 }
 
