@@ -45,16 +45,24 @@ export const inputSchema = z.object({
 export async function handler(rawInput) {
   try {
     const input = inputSchema.parse(rawInput);
+    if (input.scope === "repo" && input.base_ref) {
+      return errorContent("base_ref is not valid with scope: \"repo\"; use scope: \"branch\" for a base comparison.");
+    }
     const context = collectReviewContext(input.cwd, { base: input.base_ref, scope: input.scope });
     let content = context.content;
+    // The API fallback only receives prompt text: it cannot follow a local
+    // review-input path or inspect the repository, so it is viable only for
+    // fully inlined diff context.
+    let fallbackViable = input.scope !== "repo";
     if (Buffer.byteLength(content, "utf8") > INLINE_REVIEW_LIMIT) {
       const stateRoot = process.env.GROK_BUILD_PLUGIN_DATA || path.join(os.tmpdir(), "grok-build-mcp");
       const reviewDir = path.join(stateRoot, "review-inputs");
-      fs.mkdirSync(reviewDir, { recursive: true });
+      fs.mkdirSync(reviewDir, { recursive: true, mode: 0o700 });
       pruneStaleReviewInputs(reviewDir);
       const reviewPath = path.join(reviewDir, `${randomUUID()}.md`);
-      fs.writeFileSync(reviewPath, content, "utf8");
+      fs.writeFileSync(reviewPath, content, { encoding: "utf8", mode: 0o600 });
       content = `The review context is too large to inline. Read the review input at ${reviewPath}. Do not modify that file.`;
+      fallbackViable = false;
     }
     if (input.focus) content = `Review focus: ${input.focus}\n\n${content}`;
     if (input.adversarial) {
@@ -64,7 +72,7 @@ export async function handler(rawInput) {
       write: false,
       cwd: context.repoRoot,
       prompt: reviewPrompt({ content }),
-      allowApiFallback: input.allow_api_fallback
+      allowApiFallback: fallbackViable ? input.allow_api_fallback : false
     });
     const result = {
       source: execution.result.source,

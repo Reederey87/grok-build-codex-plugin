@@ -36,6 +36,7 @@ export async function runXaiApiFallback(options) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
+  let bodyText;
   try {
     response = await fetch(`${baseUrl}/responses`, {
       method: "POST",
@@ -46,11 +47,12 @@ export async function runXaiApiFallback(options) {
       body: JSON.stringify({ model, input: options.prompt }),
       signal: controller.signal
     });
+    // Read the body inside the timeout window: a stalled body stream must
+    // abort just like stalled headers.
+    bodyText = await response.text();
   } finally {
     clearTimeout(timer);
   }
-
-  const bodyText = await response.text();
   if (!response.ok) {
     const truncated = bodyText.length > 300 ? `${bodyText.slice(0, 300)}...` : bodyText;
     throw new Error(`xAI API fallback request failed with status ${response.status}: ${truncated}`);
