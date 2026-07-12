@@ -1,0 +1,12 @@
+{
+  "name": "grok-build-dev",
+  "interface": { "displayName": "Grok Build Dev Marketplace" },
+  "plugins": [
+    {
+      "name": "grok-build",
+      "source": { "source": "local", "path": "../../../.." },
+      "policy": { "installation": "AVAILABLE" },
+      "category": "Productivity"
+    }
+  ]
+}

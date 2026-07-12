@@ -1,0 +1,23 @@
+{
+  "name": "grok-build",
+  "version": "0.1.0",
+  "description": "Delegate reviews and coding tasks from Codex to the local Grok Build CLI.",
+  "author": { "name": "Artem Matskevych" },
+  "license": "Apache-2.0",
+  "keywords": ["grok", "grok-build", "codex", "mcp", "code-review"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Grok Build Bridge",
+    "shortDescription": "Use the local Grok Build CLI from Codex.",
+    "longDescription": "Delegate read-only reviews, adversarial checks, and gated coding tasks to Grok Build through your local subscription-authenticated CLI. Optional read-only xAI API fallback.",
+    "developerName": "Artem Matskevych",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Use Grok Build to review my current branch against main.",
+      "Ask Grok Build for an adversarial review of this implementation.",
+      "Use Grok Build to investigate this failing test and propose the smallest fix."
+    ]
+  }
+}

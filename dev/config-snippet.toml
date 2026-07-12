@@ -1,0 +1,18 @@
+[plugins."grok-build".mcp_servers.grok-build]
+enabled = true
+default_tools_approval_mode = "prompt"
+enabled_tools = [
+  "grok_build_setup",
+  "grok_build_prompt",
+  "grok_build_review",
+  "grok_build_task",
+  "grok_build_status",
+  "grok_build_result",
+  "grok_build_cancel"
+]
+
+[plugins."grok-build".mcp_servers.grok-build.tools.grok_build_review]
+approval_mode = "approve"
+
+[plugins."grok-build".mcp_servers.grok-build.tools.grok_build_task]
+approval_mode = "prompt"
