@@ -23,6 +23,7 @@ export const tool = {
   name: "grok_build_result",
   title: "Get a Grok Build result",
   description: "Return the stored result and evidence for a finished Grok job.",
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   inputSchema,
   handler
 };

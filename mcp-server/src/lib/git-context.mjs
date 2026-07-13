@@ -5,6 +5,8 @@ import { runCommand } from "./process.mjs";
 import { getGitRepositoryRoot } from "./workspace.mjs";
 
 const MAX_DIFF_BYTES = 128 * 1024;
+const MAX_SNAPSHOT_FILE_BYTES = 256 * 1024;
+const MAX_SNAPSHOT_TOTAL_BYTES = 2 * 1024 * 1024;
 const SENSITIVE_NAME = /(?:^\.|\.env(?:\.|$)|credential|secret|token|password|private|id_rsa|\.pem$|\.key$)/i;
 const DIFF_SAFETY_FLAGS = ["--no-ext-diff", "--no-textconv", "--no-renames"];
 
@@ -27,10 +29,71 @@ function isSafePath(filePath) {
   return !filePath.split(/[\\/]/).some((part) => SENSITIVE_NAME.test(part));
 }
 
-function collectFileMetadata(cwd, filePath) {
-  if (!isSafePath(filePath)) {
-    return `${filePath}: omitted by safety policy`;
+const CONTENT_SECRET_PATTERNS = [
+  /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g,
+  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)\b(\s*[:=]\s*)["']?[^\s"',;}{]{8,}["']?/gi,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,
+  /\b(?:xai|sk|ghp|github_pat|AKIA)[-_A-Za-z0-9]{12,}\b/g
+];
+
+/** Best-effort content redaction; path filtering remains a separate control. */
+export function redactReviewContent(value) {
+  let content = String(value ?? "");
+  let redactedMatches = 0;
+  for (const pattern of CONTENT_SECRET_PATTERNS) {
+    content = content.replace(pattern, () => {
+      redactedMatches += 1;
+      return "[REDACTED]";
+    });
   }
+  return { content, redactedMatches };
+}
+
+/** Build a bounded, path-filtered source snapshot for diff reviews. */
+export function collectReviewSnapshots(repoRoot, changedFiles) {
+  const sections = [];
+  let includedFiles = 0;
+  let omittedBinaryFiles = 0;
+  let omittedLargeFiles = 0;
+  let truncatedFiles = 0;
+  let redactedMatches = 0;
+  let totalBytes = 0;
+  for (const filePath of changedFiles) {
+    if (!isSafePath(filePath)) continue;
+    const absolutePath = path.join(repoRoot, filePath);
+    let stat;
+    try { stat = fs.lstatSync(absolutePath); } catch { continue; }
+    if (!stat.isFile() || stat.isSymbolicLink()) continue;
+    if (stat.size > MAX_SNAPSHOT_FILE_BYTES) {
+      omittedLargeFiles += 1;
+      continue;
+    }
+    const raw = fs.readFileSync(absolutePath);
+    if (raw.includes(0)) {
+      omittedBinaryFiles += 1;
+      continue;
+    }
+    if (totalBytes + raw.length > MAX_SNAPSHOT_TOTAL_BYTES) {
+      truncatedFiles += 1;
+      continue;
+    }
+    const redacted = redactReviewContent(raw.toString("utf8"));
+    redactedMatches += redacted.redactedMatches;
+    totalBytes += Buffer.byteLength(redacted.content, "utf8");
+    includedFiles += 1;
+    sections.push(`### ${filePath}\n\n\`\`\`text\n${redacted.content}\n\`\`\``);
+  }
+  return {
+    content: sections.length ? `## Path-filtered source snapshots\n\n${sections.join("\n\n")}` : "## Path-filtered source snapshots\n\n(none)",
+    includedFiles,
+    omittedBinaryFiles,
+    omittedLargeFiles,
+    truncatedFiles,
+    redactedMatches
+  };
+}
+
+function collectFileMetadata(cwd, filePath) {
   try {
     const stat = fs.lstatSync(path.join(cwd, filePath));
     return `${filePath}: ${stat.isDirectory() ? "directory" : "file"}, ${stat.size} bytes`;
@@ -65,12 +128,11 @@ function safeChangedPaths(cwd, diffArgs) {
   const hasSensitiveDeletion = entries.some(
     ({ status, filePath }) => status?.startsWith("D") && filePath && !isSafePath(filePath)
   );
-  return entries
-    .filter(
-      ({ status, filePath }) =>
-        filePath && isSafePath(filePath) && !(hasSensitiveDeletion && status?.startsWith("A"))
-    )
+  const paths = entries
+    .filter(({ status, filePath }) =>
+      filePath && isSafePath(filePath) && !(hasSensitiveDeletion && status?.startsWith("A")))
     .map(({ filePath }) => filePath);
+  return { paths, omittedCount: entries.length - paths.length };
 }
 
 function diffForPaths(cwd, diffArgs, paths) {
@@ -87,13 +149,16 @@ function assertSafeRef(baseRef) {
 }
 
 function workingTreeContext(repoRoot) {
-  const stagedPaths = safeChangedPaths(repoRoot, ["diff", "--cached"]);
-  const unstagedPaths = safeChangedPaths(repoRoot, ["diff"]);
+  const staged = safeChangedPaths(repoRoot, ["diff", "--cached"]);
+  const unstaged = safeChangedPaths(repoRoot, ["diff"]);
+  const stagedPaths = staged.paths;
+  const unstagedPaths = unstaged.paths;
   const untrackedPaths = splitNullSeparated(
     runGit(repoRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).stdout
   );
-  const metadata = untrackedPaths.map((filePath) => collectFileMetadata(repoRoot, filePath));
   const safeUntracked = untrackedPaths.filter(isSafePath);
+  const metadata = safeUntracked.map((filePath) => collectFileMetadata(repoRoot, filePath));
+  const omittedSensitivePaths = staged.omittedCount + unstaged.omittedCount + (untrackedPaths.length - safeUntracked.length);
 
   return {
     targetLabel: "working tree",
@@ -112,8 +177,15 @@ function workingTreeContext(repoRoot) {
       diffForPaths(repoRoot, ["diff"], unstagedPaths),
       "",
       "## Untracked file metadata",
-      metadata.join("\n") || "(none)"
+      metadata.join("\n") || "(none)",
+      "",
+      "## Safety omissions",
+      omittedSensitivePaths > 0
+        ? `${omittedSensitivePaths} changed or untracked path(s) omitted by safety policy; names and contents withheld.`
+        : "(none)"
     ].join("\n")
+    ,
+    omittedSensitivePaths
   };
 }
 
@@ -122,7 +194,8 @@ function branchContext(repoRoot, baseRef) {
   runGit(repoRoot, ["rev-parse", "--verify", `${baseRef}^{commit}`]);
   runGit(repoRoot, ["merge-base", "HEAD", baseRef]);
   const range = `${baseRef}...HEAD`;
-  const changedFiles = safeChangedPaths(repoRoot, ["diff", range]);
+  const changed = safeChangedPaths(repoRoot, ["diff", range]);
+  const changedFiles = changed.paths;
   const diffStat =
     changedFiles.length > 0
       ? runGit(repoRoot, ["diff", "--stat", ...DIFF_SAFETY_FLAGS, range, "--", ...changedFiles]).stdout.trim() || "(none)"
@@ -142,8 +215,14 @@ function branchContext(repoRoot, baseRef) {
       diffStat,
       "",
       "## Branch diff",
-      diffForPaths(repoRoot, ["diff", range], changedFiles)
-    ].join("\n")
+      diffForPaths(repoRoot, ["diff", range], changedFiles),
+      "",
+      "## Safety omissions",
+      changed.omittedCount > 0
+        ? `${changed.omittedCount} changed path(s) omitted by safety policy; names and contents withheld.`
+        : "(none)"
+    ].join("\n"),
+    omittedSensitivePaths: changed.omittedCount
   };
 }
 
@@ -161,6 +240,7 @@ export function collectReviewContext(cwd, options = {}) {
       repoRoot,
       targetLabel: "repository architecture",
       changedFiles: [],
+      omittedSensitivePaths: 0,
       content: "Inspect the repository architecture using only the permitted read-only tools. Do not inspect dotfiles, credentials, or secret material."
     };
   }

@@ -14,6 +14,10 @@ const statePath = ${JSON.stringify(statePath)};
 const behavior = ${JSON.stringify(behavior)};
 const args = process.argv.slice(2);
 
+if (behavior === "ignore-term-write") {
+  process.on("SIGTERM", () => {});
+}
+
 function loadState() {
   return fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : { calls: [] };
 }
@@ -43,6 +47,15 @@ if (args.includes("inspect")) {
   process.exit(0);
 }
 
+if (args.includes("models")) {
+  if (behavior === "inspect-fails") {
+    console.error("not authenticated; run grok login");
+    process.exit(1);
+  }
+  console.log("You are logged in with grok.com.\\n\\nDefault model: grok-4.5\\n\\nAvailable models:\\n  * grok-4.5 (default)\\n  - grok-composer-2.5-fast");
+  process.exit(0);
+}
+
 const state = loadState();
 state.calls.push({
   args,
@@ -60,15 +73,23 @@ if (args.includes("sessions")) {
   process.exit(0);
 }
 
-if (behavior === "write" || behavior === "delayed-write" || behavior === "cancelled-with-edits") {
+if (behavior === "write" || behavior === "write-sensitive" || behavior === "delayed-write" || behavior === "ignore-term-write" || behavior === "cancelled-with-edits") {
   fs.writeFileSync(path.join(process.cwd(), "grok-write.txt"), "changed by fake Grok\\n", "utf8");
+}
+if (behavior === "write-sensitive") {
+  fs.writeFileSync(path.join(process.cwd(), ".env"), "SECRET=changed-by-fake-grok\\n", "utf8");
 }
 
 const output = behavior === "malformed-json"
   ? "not valid json"
   : behavior === "cancelled" || behavior === "cancelled-with-edits" || behavior === "max-turns"
     ? JSON.stringify({ text: "", stopReason: "Cancelled" })
-    : JSON.stringify({ text: "fake response", stopReason: "EndTurn", prompt: args[args.indexOf("-p") + 1] || null });
+    : JSON.stringify({
+        text: "fake response",
+        stopReason: "EndTurn",
+        prompt: args[args.indexOf("-p") + 1] || null,
+        ...(behavior === "session-json" ? { sessionId: "019f5958-0af0-7822-be86-dc675dec62b0" } : {})
+      });
 
 if (behavior === "max-turns") {
   console.log(output);
@@ -76,10 +97,10 @@ if (behavior === "max-turns") {
   process.exit(1);
 }
 
-if (behavior === "delayed" || behavior === "delayed-write") {
+if (behavior === "delayed" || behavior === "delayed-write" || behavior === "slow-delayed" || behavior === "ignore-term-write") {
   setTimeout(() => {
     console.log(output);
-  }, 250);
+  }, behavior === "ignore-term-write" ? 60_000 : behavior === "slow-delayed" ? 1500 : 250);
 } else {
   console.log(output);
 }

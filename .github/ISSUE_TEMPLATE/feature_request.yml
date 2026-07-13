@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a focused improvement to the plugin.
+title: "[Feature]: "
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: This request does not require weakening the documented safety gates.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem or limitation should be addressed?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior change and its expected interface.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or alternative designs did you consider?
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and disclosure impact
+      description: Note any effect on external disclosure, tool permissions, writes, credentials, or stored state.
+    validations:
+      required: true

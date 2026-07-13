@@ -1,6 +1,18 @@
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_MODEL = "grok-4.5";
 const DEFAULT_TIMEOUT_MS = 120000;
+const MAX_TIMEOUT_MS = 600000;
+const CUSTOM_BASE_URL_TRUST_ENV = "GROK_BUILD_TRUST_CUSTOM_XAI_BASE_URL";
+
+function configuredTimeout(env = process.env) {
+  const raw = env.GROK_BUILD_XAI_TIMEOUT_MS;
+  if (raw === undefined || raw === "") return DEFAULT_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_TIMEOUT_MS) {
+    throw new Error(`GROK_BUILD_XAI_TIMEOUT_MS must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
+  }
+  return parsed;
+}
 
 /**
  * @param {unknown} json
@@ -24,13 +36,35 @@ function extractOutputText(json) {
   return JSON.stringify(json);
 }
 
+export function resolveFallbackEndpoint(env = process.env) {
+  const configured = env.GROK_BUILD_XAI_BASE_URL || DEFAULT_BASE_URL;
+  let base;
+  try {
+    base = new URL(configured);
+  } catch {
+    throw new Error("GROK_BUILD_XAI_BASE_URL must be a valid absolute URL.");
+  }
+  if (base.username || base.password) throw new Error("GROK_BUILD_XAI_BASE_URL must not contain URL credentials.");
+  if (base.hash || base.search) throw new Error("GROK_BUILD_XAI_BASE_URL must not contain a query string or fragment.");
+  const loopback = base.hostname === "localhost" || base.hostname === "127.0.0.1" || base.hostname === "[::1]" || base.hostname === "::1";
+  if (base.protocol !== "https:" && !(base.protocol === "http:" && loopback)) {
+    throw new Error("GROK_BUILD_XAI_BASE_URL must use HTTPS; HTTP is allowed only for loopback test endpoints.");
+  }
+  const official = base.protocol === "https:" && base.hostname === "api.x.ai";
+  if (!official && !loopback && env[CUSTOM_BASE_URL_TRUST_ENV] !== "true") {
+    throw new Error(`Custom xAI fallback hosts require ${CUSTOM_BASE_URL_TRUST_ENV}=true.`);
+  }
+  if (!base.pathname.endsWith("/")) base.pathname += "/";
+  return new URL("responses", base).toString();
+}
+
 /**
  * @param {{ prompt: string, model: string|null }} options
  * @returns {Promise<{source: "xai_api_fallback", model: string, write_supported: false, text: string}>}
  */
 export async function runXaiApiFallback(options) {
-  const baseUrl = process.env.GROK_BUILD_XAI_BASE_URL || DEFAULT_BASE_URL;
-  const timeoutMs = Number(process.env.GROK_BUILD_XAI_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
+  const endpoint = resolveFallbackEndpoint();
+  const timeoutMs = configuredTimeout();
   const model = options.model || DEFAULT_MODEL;
 
   const controller = new AbortController();
@@ -38,13 +72,13 @@ export async function runXaiApiFallback(options) {
   let response;
   let bodyText;
   try {
-    response = await fetch(`${baseUrl}/responses`, {
+    response = await fetch(endpoint, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.XAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ model, input: options.prompt }),
+      body: JSON.stringify({ model, input: options.prompt, store: false }),
       signal: controller.signal
     });
     // Read the body inside the timeout window: a stalled body stream must
@@ -54,8 +88,7 @@ export async function runXaiApiFallback(options) {
     clearTimeout(timer);
   }
   if (!response.ok) {
-    const truncated = bodyText.length > 300 ? `${bodyText.slice(0, 300)}...` : bodyText;
-    throw new Error(`xAI API fallback request failed with status ${response.status}: ${truncated}`);
+    throw new Error(`xAI API fallback request failed with status ${response.status}.`);
   }
 
   /** @type {unknown} */

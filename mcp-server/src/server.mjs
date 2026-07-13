@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 
 import { tool as cancelTool } from "./tools/cancel.mjs";
 import { tool as promptTool } from "./tools/prompt.mjs";
@@ -32,27 +33,15 @@ async function main() {
   }
 
   const server = new McpServer({ name: "grok-build", version: String(packageJson.version) });
-  server.registerTool(setupTool.name, {
-    title: setupTool.title, description: setupTool.description, inputSchema: setupTool.inputSchema
-  }, setupTool.handler);
-  server.registerTool(promptTool.name, {
-    title: promptTool.title, description: promptTool.description, inputSchema: promptTool.inputSchema
-  }, promptTool.handler);
-  server.registerTool(reviewTool.name, {
-    title: reviewTool.title, description: reviewTool.description, inputSchema: reviewTool.inputSchema
-  }, reviewTool.handler);
-  server.registerTool(taskTool.name, {
-    title: taskTool.title, description: taskTool.description, inputSchema: taskTool.inputSchema
-  }, taskTool.handler);
-  server.registerTool(statusTool.name, {
-    title: statusTool.title, description: statusTool.description, inputSchema: statusTool.inputSchema
-  }, statusTool.handler);
-  server.registerTool(resultTool.name, {
-    title: resultTool.title, description: resultTool.description, inputSchema: resultTool.inputSchema
-  }, resultTool.handler);
-  server.registerTool(cancelTool.name, {
-    title: cancelTool.title, description: cancelTool.description, inputSchema: cancelTool.inputSchema
-  }, cancelTool.handler);
+  for (const tool of [setupTool, promptTool, reviewTool, taskTool, statusTool, resultTool, cancelTool]) {
+    server.registerTool(tool.name, {
+      title: tool.title,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      outputSchema: z.object({ result: z.unknown() }),
+      annotations: tool.annotations
+    }, tool.handler);
+  }
   await server.connect(new StdioServerTransport());
 }
 

@@ -6,6 +6,7 @@ import test from "node:test";
 import { installFakeGrok } from "./fake-grok-fixture.mjs";
 import { initGitRepo, makeTempDir } from "./helpers.mjs";
 import { handler as task } from "../mcp-server/src/tools/task.mjs";
+import { acquireWriteLock, createJob, releaseWriteLock, writeJob } from "../mcp-server/src/lib/state.mjs";
 
 function parseContent(response) {
   return JSON.parse(response.content[0].text);
@@ -59,21 +60,56 @@ test("write mode is rejected before invoking Grok when the gate is disabled", as
   }
 });
 
-test("enabled write mode uses workspace sandbox and only opts into always-approve explicitly", { timeout: 10000 }, async () => {
+test("enabled write mode uses a strict curated capability policy", { timeout: 10000 }, async () => {
   const context = makeContext();
   try {
-    await withEnvironment({ ...context.env, GROK_BUILD_ALLOW_WRITE: "true" }, async () => {
+    await withEnvironment({ ...context.env, GROK_BUILD_ALLOW_WRITE: "true", GROK_BUILD_ALLOW_ALWAYS_APPROVE: "true" }, async () => {
       const first = await task({ cwd: context.cwd, task: "Make one change", write: true });
       assert.equal(first.isError, undefined);
       let call = context.fixture.readState().calls.at(-1);
-      assert.deepEqual(call.args.slice(call.args.indexOf("--sandbox"), call.args.indexOf("--sandbox") + 2), ["--sandbox", "workspace"]);
+      assert.deepEqual(call.args.slice(call.args.indexOf("--sandbox"), call.args.indexOf("--sandbox") + 2), ["--sandbox", "strict"]);
+      assert.deepEqual(call.args.slice(call.args.indexOf("--permission-mode"), call.args.indexOf("--permission-mode") + 2), ["--permission-mode", "dontAsk"]);
+      assert.deepEqual(call.args.slice(call.args.indexOf("--tools"), call.args.indexOf("--tools") + 2), ["--tools", "Read,Grep,Glob,Edit,Bash"]);
+      assert.equal(call.args.includes("Bash(node --test *)"), true);
+      assert.equal(call.args.includes("Bash(head *)"), true);
+      assert.equal(call.args.includes("Read(**/.env*)"), false);
       assert.equal(call.args.includes("--always-approve"), false);
 
       const second = await task({ cwd: context.cwd, task: "Make another change", write: true, always_approve: true });
       assert.equal(second.isError, undefined);
       call = context.fixture.readState().calls.at(-1);
-      assert.deepEqual(call.args.slice(call.args.indexOf("--sandbox"), call.args.indexOf("--sandbox") + 2), ["--sandbox", "workspace"]);
-      assert.equal(call.args.includes("--always-approve"), true);
+      assert.deepEqual(call.args.slice(call.args.indexOf("--sandbox"), call.args.indexOf("--sandbox") + 2), ["--sandbox", "strict"]);
+      assert.equal(call.args.includes("--always-approve"), false);
+    });
+  } finally {
+    fs.rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
+test("always-approve requires its dedicated server gate", async () => {
+  const context = makeContext();
+  try {
+    await withEnvironment({ ...context.env, GROK_BUILD_ALLOW_WRITE: "true", GROK_BUILD_ALLOW_ALWAYS_APPROVE: undefined }, async () => {
+      const response = await task({ cwd: context.cwd, task: "Make a change", write: true, always_approve: true });
+      assert.equal(response.isError, true);
+      assert.match(parseContent(response).error, /GROK_BUILD_ALLOW_ALWAYS_APPROVE/);
+      assert.deepEqual(context.fixture.readState().calls, []);
+    });
+  } finally {
+    fs.rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
+test("protected path changes fail the write task without reverting them", async () => {
+  const context = makeContext("write-sensitive");
+  try {
+    await withEnvironment({ ...context.env, GROK_BUILD_ALLOW_WRITE: "true" }, async () => {
+      const response = await task({ cwd: context.cwd, task: "Make a sensitive change", write: true });
+      assert.equal(response.isError, true);
+      const body = parseContent(response);
+      assert.equal(body.status, "failed");
+      assert.deepEqual(body.evidence.protected_path_changes, [".env"]);
+      assert.equal(fs.existsSync(path.join(context.cwd, ".env")), true);
     });
   } finally {
     fs.rmSync(context.root, { recursive: true, force: true });
@@ -89,6 +125,25 @@ test("write mode requires a Git repository", async () => {
       const response = await task({ cwd: outside, task: "Make a change", write: true });
       assert.equal(response.isError, true);
       assert.match(parseContent(response).error, /inside a Git repository/);
+    });
+  } finally {
+    fs.rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
+test("a timed-out writer is killed before its lock is released", { timeout: 10000 }, async () => {
+  const context = makeContext("ignore-term-write");
+  try {
+    await withEnvironment({ ...context.env, GROK_BUILD_ALLOW_WRITE: "true" }, async () => {
+      const response = await task({ cwd: context.cwd, task: "Time out safely", write: true, timeout_ms: 25 });
+      assert.equal(response.isError, true);
+      const body = parseContent(response);
+      assert.equal(body.status, "failed");
+      assert.equal(body.evidence.termination_confirmed, true);
+      assert.deepEqual(body.evidence.remaining_pids, []);
+      const replacement = writeJob(context.cwd, createJob("task", context.cwd));
+      acquireWriteLock(context.cwd, replacement.id);
+      releaseWriteLock(context.cwd, replacement.id);
     });
   } finally {
     fs.rmSync(context.root, { recursive: true, force: true });

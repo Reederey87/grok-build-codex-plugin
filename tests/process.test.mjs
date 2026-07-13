@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { terminateProcessTree } from "../mcp-server/src/lib/process.mjs";
+import { isProcessAlive, runProcess, terminateProcessTree, tryTerminateProcessTree } from "../mcp-server/src/lib/process.mjs";
 
 test("terminateProcessTree signals the process group with SIGTERM on non-Windows", () => {
   const calls = [];
@@ -65,4 +65,41 @@ test("terminateProcessTree uses taskkill on Windows", () => {
   assert.equal(outcome.attempted, true);
   assert.equal(outcome.method, "taskkill");
   assert.equal(outcome.delivered, false);
+});
+
+test("tryTerminateProcessTree records signalling errors without throwing", () => {
+  const result = tryTerminateProcessTree(42, {
+    platform: "linux",
+    killImpl() {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    }
+  });
+  assert.equal(result.delivered, false);
+  assert.match(result.error, /not permitted/);
+});
+
+test("runProcess bounds a hung subprocess and reaps it", { skip: process.platform === "win32" }, async () => {
+  const result = await runProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    timeout: 25
+  });
+  assert.equal(result.error?.code, "ETIMEDOUT");
+  assert.equal(typeof result.pid, "number");
+  assert.equal(result.termination?.reason, "timeout");
+  assert.equal(result.termination?.confirmed, true);
+  assert.deepEqual(result.termination?.remaining, []);
+  assert.equal(isProcessAlive(result.pid), false);
+});
+
+test("runProcess waits for asynchronous PID persistence before returning", async () => {
+  let persisted = false;
+  const result = await runProcess(process.execPath, ["-e", "process.stdout.write('ok')"], {
+    onPid: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      persisted = true;
+    }
+  });
+  assert.equal(result.status, 0);
+  assert.equal(persisted, true);
+  assert.equal(result.pidRegistrationError, null);
 });

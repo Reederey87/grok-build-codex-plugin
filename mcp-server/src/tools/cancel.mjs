@@ -1,11 +1,15 @@
 import { z } from "zod";
 
-import { terminateProcessTree } from "../lib/process.mjs";
+import { terminateProcessTreesAndWait } from "../lib/process.mjs";
 import {
   appendJobLog,
   compareAndSwapJobState,
   isActiveJob,
+  isJobOwnershipFresh,
+  patchJobState,
   readJob,
+  recordedJobPids,
+  recordedProcessesGone,
   releaseWriteLock,
   resolveJobReference
 } from "../lib/state.mjs";
@@ -22,25 +26,67 @@ export async function handler(rawInput) {
     const found = resolveJobReference(cwd, input.job_id);
     if (!found) throw new Error(`No Grok job found for "${input.job_id}".`);
     const priorStatus = found.status;
-    let cancelled = null;
-    let processId = found.grokPid ?? found.pid ?? Number.NaN;
+    if (!isActiveJob(found)) throw new Error(`Job ${found.id} is already ${found.status}.`);
+    if (!isJobOwnershipFresh(found) && recordedProcessesGone(found)) {
+      const orphaned = await compareAndSwapJobState(cwd, found.id, found.status, {
+        ...found,
+        status: "orphaned",
+        pid: null,
+        workerPid: null,
+        grokPid: null,
+        completedAt: new Date().toISOString(),
+        errorMessage: "Worker ownership lease expired after all recorded processes exited."
+      });
+      if (!orphaned.success) throw new Error(`Job ${found.id} state changed before stale ownership could be recorded.`);
+      if (found.request?.write === true) releaseWriteLock(cwd, found.id);
+      appendJobLog(cwd, found.id, "Marked orphaned after the ownership lease expired and all recorded processes were confirmed gone.");
+      return jsonContent({ job_id: found.id, prior_status: priorStatus, status: "orphaned", termination: null });
+    }
+    let cancelling = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const current = readJob(cwd, found.id);
       if (!current || !isActiveJob(current)) throw new Error(`Job ${found.id} is already ${current?.status ?? "unknown"}.`);
-      processId = current.grokPid ?? current.pid ?? processId;
-      const result = compareAndSwapJobState(cwd, found.id, current.status, {
+      if (current.status === "cancelling") {
+        cancelling = current;
+        break;
+      }
+      const result = await compareAndSwapJobState(cwd, found.id, current.status, {
         ...current,
-        status: "cancelled",
-        pid: null,
-        grokPid: null,
-        completedAt: new Date().toISOString(),
-        errorMessage: "Cancelled by user."
+        status: "cancelling",
+        cancellationRequestedAt: new Date().toISOString()
       });
-      if (result.success) { cancelled = result.job; break; }
+      if (result.success) { cancelling = result.job; break; }
     }
-    if (!cancelled) throw new Error(`Job ${found.id} state changed before cancellation could complete.`);
-    const termination = terminateProcessTree(processId, { cwd });
-    if (found.request?.write === true) releaseWriteLock(cwd, found.id);
+    if (!cancelling) throw new Error(`Job ${found.id} state changed before cancellation could complete.`);
+    const pids = recordedJobPids(cancelling);
+    if (pids.length === 0) {
+      appendJobLog(cwd, found.id, "Cancellation is waiting for a killable worker or Grok PID to be recorded.");
+      throw new Error(`Job ${found.id} is still cancelling; no killable process PID has been recorded yet.`);
+    }
+    const termination = await terminateProcessTreesAndWait(pids, { cwd });
+    if (!termination.confirmed) {
+      appendJobLog(cwd, found.id, `Cancellation could not confirm process exit: ${termination.remaining.join(", ")}.`);
+      throw new Error(`Job ${found.id} is still cancelling; process exit could not be confirmed.`);
+    }
+    const finished = await patchJobState(cwd, found.id, "cancelling", () => ({
+      status: "cancelled",
+      completedAt: new Date().toISOString(),
+      errorMessage: "Cancelled by user."
+    }));
+    if (!finished.success) {
+      const current = readJob(cwd, found.id);
+      if (!current || isActiveJob(current)) throw new Error(`Job ${found.id} state changed before cancellation could finish.`);
+      if (cancelling.request?.write === true && recordedProcessesGone(current)) releaseWriteLock(cwd, found.id);
+      appendJobLog(cwd, found.id, `Cancellation raced terminal completion; retained status ${current.status}.`);
+      return jsonContent({ job_id: found.id, prior_status: priorStatus, status: current.status, termination });
+    }
+    const terminal = readJob(cwd, found.id);
+    if (cancelling.request?.write === true) {
+      if (!terminal || !recordedProcessesGone(terminal)) {
+        throw new Error(`Job ${found.id} was cancelled but process exit could not be re-confirmed; the write lock was retained.`);
+      }
+      releaseWriteLock(cwd, found.id);
+    }
     appendJobLog(cwd, found.id, "Cancelled by user.");
     return jsonContent({ job_id: found.id, prior_status: priorStatus, status: "cancelled", termination });
   } catch (error) {
@@ -52,6 +98,7 @@ export const tool = {
   name: "grok_build_cancel",
   title: "Cancel a Grok Build job",
   description: "Atomically cancel an active job, terminate its process tree, and release its write lock.",
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   inputSchema,
   handler
 };
