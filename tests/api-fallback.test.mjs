@@ -7,6 +7,7 @@ import test from "node:test";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { handler as prompt } from "../mcp-server/src/tools/prompt.mjs";
 import { handler as task } from "../mcp-server/src/tools/task.mjs";
+import { resolveFallbackEndpoint } from "../mcp-server/src/lib/api-fallback.mjs";
 
 function parseContent(response) {
   return JSON.parse(response.content[0].text);
@@ -86,6 +87,10 @@ test("an explicitly allowed prompt falls back to the local xAI stub when Grok is
       assert.equal(stub.requests.length, 1);
       assert.equal(stub.requests[0].url, "/responses");
       assert.equal(stub.requests[0].authorization, "Bearer test");
+      const requestBody = JSON.parse(stub.requests[0].body);
+      assert.equal(requestBody.model, "grok-4.5");
+      assert.equal(typeof requestBody.input, "string");
+      assert.equal(requestBody.store, false);
     });
   } finally {
     fs.rmSync(context.root, { recursive: true, force: true });
@@ -151,7 +156,7 @@ test("write tasks never use API fallback", async (t) => {
   }
 });
 
-test("a non-2xx fallback response surfaces its status and body", async (t) => {
+test("a non-2xx fallback response surfaces its status without echoing its body", async (t) => {
   const stub = await makeStub(t, { status: 503, body: { error: "stub unavailable" } });
   const context = makeContext();
   try {
@@ -163,10 +168,46 @@ test("a non-2xx fallback response surfaces its status and body", async (t) => {
     }, async () => {
       const response = await prompt({ cwd: context.cwd, prompt: "Surface the failure", allow_api_fallback: true });
       assert.equal(response.isError, true);
-      assert.match(parseContent(response).error, /status 503.*stub unavailable/);
+      assert.match(parseContent(response).error, /status 503/);
+      assert.doesNotMatch(parseContent(response).error, /stub unavailable/);
       assert.equal(stub.requests.length, 1);
     });
   } finally {
     fs.rmSync(context.root, { recursive: true, force: true });
   }
+});
+
+test("fallback rejects invalid configured timeouts before making a request", async (t) => {
+  const stub = await makeStub(t);
+  const context = makeContext();
+  try {
+    await withEnvironment({
+      PATH: context.noGrokPath,
+      GROK_BUILD_XAI_BASE_URL: stub.baseUrl,
+      GROK_BUILD_XAI_TIMEOUT_MS: "-1",
+      XAI_API_KEY: "test"
+    }, async () => {
+      const response = await prompt({ cwd: context.cwd, prompt: "Reject bad timeout", allow_api_fallback: true });
+      assert.equal(response.isError, true);
+      assert.match(parseContent(response).error, /GROK_BUILD_XAI_TIMEOUT_MS/);
+      assert.equal(stub.requests.length, 0);
+    });
+  } finally {
+    fs.rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
+test("fallback base URLs require an explicit trust decision for custom hosts", () => {
+  assert.equal(resolveFallbackEndpoint({}), "https://api.x.ai/v1/responses");
+  assert.equal(resolveFallbackEndpoint({ GROK_BUILD_XAI_BASE_URL: "http://127.0.0.1:8123/v1" }), "http://127.0.0.1:8123/v1/responses");
+  assert.throws(
+    () => resolveFallbackEndpoint({ GROK_BUILD_XAI_BASE_URL: "https://gateway.example/v1" }),
+    /TRUST_CUSTOM_XAI_BASE_URL/
+  );
+  assert.equal(
+    resolveFallbackEndpoint({ GROK_BUILD_XAI_BASE_URL: "https://gateway.example/v1", GROK_BUILD_TRUST_CUSTOM_XAI_BASE_URL: "true" }),
+    "https://gateway.example/v1/responses"
+  );
+  assert.throws(() => resolveFallbackEndpoint({ GROK_BUILD_XAI_BASE_URL: "https://user:secret@api.x.ai/v1" }), /must not contain URL credentials/);
+  assert.throws(() => resolveFallbackEndpoint({ GROK_BUILD_XAI_BASE_URL: "http://api.x.ai/v1" }), /must use HTTPS/);
 });

@@ -1,9 +1,11 @@
 {
-  "grok-build": {
-    "command": "/bin/sh",
-    "args": ["${PLUGIN_ROOT}/mcp-server/bin/grok-build-mcp"],
-    "env": {
-      "GROK_BUILD_API_FALLBACK": "false"
+  "mcpServers": {
+    "grok-build": {
+      "command": "/bin/sh",
+      "args": ["${PLUGIN_ROOT}/mcp-server/bin/grok-build-mcp"],
+      "env": {
+        "GROK_BUILD_API_FALLBACK": "false"
+      }
     }
   }
 }

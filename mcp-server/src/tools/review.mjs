@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import process from "node:process";
 
 import { z } from "zod";
 
-import { collectReviewContext } from "../lib/git-context.mjs";
+import { collectReviewContext, collectReviewSnapshots, redactReviewContent } from "../lib/git-context.mjs";
 import { reviewPrompt } from "../lib/prompts.mjs";
-import { errorContent, executeModelRequest, jsonContent } from "./shared.mjs";
+import { resolveStateRoot } from "../lib/state.mjs";
+import { DEFAULT_TIMEOUT_MS, MAX_LOCAL_TIMEOUT_MS, errorContent, executeModelRequest, jsonContent } from "./shared.mjs";
 
 const INLINE_REVIEW_LIMIT = 60 * 1024;
 const REVIEW_INPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -25,7 +24,7 @@ function pruneStaleReviewInputs(reviewDir) {
   for (const entry of entries) {
     const entryPath = path.join(reviewDir, entry);
     try {
-      if (fs.statSync(entryPath).mtimeMs < cutoff) fs.unlinkSync(entryPath);
+      if (fs.statSync(entryPath).mtimeMs < cutoff) fs.rmSync(entryPath, { recursive: true, force: true });
     } catch {
       // Best effort: a vanished or locked file must not fail the review.
     }
@@ -38,7 +37,11 @@ export const inputSchema = z.object({
   scope: z.enum(["working-tree", "branch", "repo"]).default("working-tree"),
   adversarial: z.boolean().optional(),
   focus: z.string().min(1).optional(),
-  allow_api_fallback: z.boolean().optional()
+  model: z.string().min(1).optional(),
+  timeout_ms: z.number().int().min(1).max(MAX_LOCAL_TIMEOUT_MS).optional(),
+  allow_api_fallback: z.boolean().optional(),
+  preview_only: z.boolean().optional(),
+  external_disclosure_acknowledged: z.boolean().optional()
 });
 
 /** @param {z.infer<typeof inputSchema>} rawInput */
@@ -49,18 +52,76 @@ export async function handler(rawInput) {
       return errorContent("base_ref is not valid with scope: \"repo\"; use scope: \"branch\" for a base comparison.");
     }
     const context = collectReviewContext(input.cwd, { base: input.base_ref, scope: input.scope });
-    let content = context.content;
+    const redactedContext = redactReviewContent(context.content);
+    const snapshots = input.scope === "repo"
+      ? { content: "", includedFiles: 0, omittedBinaryFiles: 0, omittedLargeFiles: 0, truncatedFiles: 0, redactedMatches: 0 }
+      : collectReviewSnapshots(context.repoRoot, context.changedFiles);
+    let content = [redactedContext.content, snapshots.content].filter(Boolean).join("\n\n");
+    let reviewPath = null;
+    let reviewSessionDir = null;
+    let executionCwd = context.repoRoot;
+    const contentBytes = Buffer.byteLength(content, "utf8");
+    const usesReviewInputFile = contentBytes > INLINE_REVIEW_LIMIT;
+    const coverage = {
+      path_filtered_files: context.changedFiles.length,
+      redacted_matches: redactedContext.redactedMatches + snapshots.redactedMatches,
+      snapshot_files: snapshots.includedFiles,
+      omitted_binary_files: snapshots.omittedBinaryFiles,
+      omitted_large_files: snapshots.omittedLargeFiles,
+      truncated_snapshot_files: snapshots.truncatedFiles,
+      diff_complete: !context.content.includes("diff omitted because it exceeds"),
+      source_snapshot_available: snapshots.includedFiles > 0,
+      content_redaction_applied: input.scope !== "repo"
+    };
+    if (input.preview_only === true) {
+      return jsonContent({
+        preview: true,
+        scope: input.scope,
+        target: context.targetLabel,
+        path_filtered_changed_files: context.changedFiles,
+        omitted_sensitive_paths: context.omittedSensitivePaths ?? 0,
+        coverage,
+        content_bytes: contentBytes,
+        uses_review_input_file: usesReviewInputFile,
+        external_service: "xAI via local Grok CLI",
+        would_send_repository_content: true
+      });
+    }
+    if (input.external_disclosure_acknowledged !== true) {
+      return errorContent(
+        "external_disclosure_acknowledged must be true: this review sends safe repository context to xAI via the local Grok CLI; use preview_only first to inspect the disclosure summary."
+      );
+    }
     // The API fallback only receives prompt text: it cannot follow a local
     // review-input path or inspect the repository, so it is viable only for
     // fully inlined diff context.
     let fallbackViable = input.scope !== "repo";
-    if (Buffer.byteLength(content, "utf8") > INLINE_REVIEW_LIMIT) {
-      const stateRoot = process.env.GROK_BUILD_PLUGIN_DATA || path.join(os.tmpdir(), "grok-build-mcp");
+    if (input.scope !== "repo") {
+      const stateRoot = resolveStateRoot();
       const reviewDir = path.join(stateRoot, "review-inputs");
+      fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+      fs.chmodSync(stateRoot, 0o700);
       fs.mkdirSync(reviewDir, { recursive: true, mode: 0o700 });
+      fs.chmodSync(reviewDir, 0o700);
       pruneStaleReviewInputs(reviewDir);
-      const reviewPath = path.join(reviewDir, `${randomUUID()}.md`);
-      fs.writeFileSync(reviewPath, content, { encoding: "utf8", mode: 0o600 });
+      reviewSessionDir = fs.mkdtempSync(path.join(reviewDir, "review-"));
+      fs.chmodSync(reviewSessionDir, 0o700);
+      executionCwd = reviewSessionDir;
+    }
+    if (usesReviewInputFile) {
+      const reviewDir = reviewSessionDir ?? path.join(resolveStateRoot(), "review-inputs");
+      if (!reviewSessionDir) {
+        fs.mkdirSync(reviewDir, { recursive: true, mode: 0o700 });
+        fs.chmodSync(reviewDir, 0o700);
+        pruneStaleReviewInputs(reviewDir);
+      }
+      reviewPath = path.join(reviewDir, `${randomUUID()}.md`);
+      const descriptor = fs.openSync(reviewPath, "wx", 0o600);
+      try {
+        fs.writeFileSync(descriptor, content, "utf8");
+      } finally {
+        fs.closeSync(descriptor);
+      }
       content = `The review context is too large to inline. Read the review input at ${reviewPath}. Do not modify that file.`;
       fallbackViable = false;
     }
@@ -68,16 +129,35 @@ export async function handler(rawInput) {
     if (input.adversarial) {
       content = `Use an adversarial review posture: actively challenge assumptions and search for subtle failure modes, while reporting only evidence-backed findings.\n\n${content}`;
     }
-    const execution = await executeModelRequest({
-      write: false,
-      cwd: context.repoRoot,
-      prompt: reviewPrompt({ content }),
-      allowApiFallback: fallbackViable ? input.allow_api_fallback : false
-    });
+    let execution;
+    try {
+      execution = await executeModelRequest({
+        write: false,
+        cwd: executionCwd,
+        prompt: reviewPrompt({ content }),
+        model: input.model,
+        timeoutMs: input.timeout_ms ?? DEFAULT_TIMEOUT_MS,
+        allowApiFallback: fallbackViable ? input.allow_api_fallback : false,
+        cleanupSession: true
+      });
+    } finally {
+      if (reviewPath) {
+        try { fs.unlinkSync(reviewPath); } catch { /* crash recovery pruning remains as a backstop */ }
+      }
+      if (reviewSessionDir) {
+        try { fs.rmSync(reviewSessionDir, { recursive: true, force: true }); } catch { /* crash recovery pruning remains as a backstop */ }
+      }
+    }
     const result = {
       source: execution.result.source,
       stop_reason: execution.result.stop_reason ?? null,
       findings: execution.result.text,
+      requested_model: input.model ?? null,
+      configured_model: execution.result.configured_model ?? null,
+      effective_model: execution.result.model ?? input.model ?? null,
+      model_source: execution.result.model_source ?? null,
+      result_model: execution.result.model ?? null,
+      coverage,
       ...(execution.result.model !== undefined ? { model: execution.result.model } : {}),
       ...(execution.result.error ? { error: execution.result.error } : {})
     };
@@ -91,7 +171,8 @@ export async function handler(rawInput) {
 export const tool = {
   name: "grok_build_review",
   title: "Review with Grok Build",
-  description: "Collect safe Git context and run a read-only Grok code review.",
+  description: "Preview or send safe Git context to xAI through the local Grok CLI for a read-only review. Execution requires explicit external-disclosure acknowledgement.",
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   inputSchema,
   handler
 };

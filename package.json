@@ -1,6 +1,23 @@
 {
   "name": "grok-build-codex-plugin",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260713025650",
+  "description": "Codex plugin and MCP bridge for delegated Grok Build reviews and bounded coding tasks.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Reederey87/grok-build-codex-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Reederey87/grok-build-codex-plugin/issues"
+  },
+  "homepage": "https://github.com/Reederey87/grok-build-codex-plugin#readme",
+  "keywords": [
+    "codex",
+    "grok",
+    "mcp",
+    "plugin",
+    "code-review"
+  ],
   "type": "module",
   "private": true,
   "engines": {

@@ -2,14 +2,14 @@ import { z } from "zod";
 
 import { readOnlyPrompt } from "../lib/prompts.mjs";
 import { canonicalDirectory } from "../lib/workspace.mjs";
-import { DEFAULT_TIMEOUT_MS, errorContent, executeModelRequest, jsonContent } from "./shared.mjs";
+import { DEFAULT_TIMEOUT_MS, MAX_LOCAL_TIMEOUT_MS, errorContent, executeModelRequest, jsonContent } from "./shared.mjs";
 
 export const inputSchema = z.object({
   cwd: z.string(),
   prompt: z.string().min(1),
   model: z.string().min(1).optional(),
   allow_api_fallback: z.boolean().optional(),
-  timeout_ms: z.number().int().positive().optional(),
+  timeout_ms: z.number().int().min(1).max(MAX_LOCAL_TIMEOUT_MS).optional(),
   session_id: z.string().min(1).optional(),
   resume: z.boolean().optional()
 }).refine((value) => value.resume !== true || Boolean(value.session_id), {
@@ -42,6 +42,7 @@ export const tool = {
   name: "grok_build_prompt",
   title: "Prompt Grok Build",
   description: "Run a foreground, strictly read-only Grok Build prompt in a workspace.",
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   inputSchema,
   handler
 };

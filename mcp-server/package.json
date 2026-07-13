@@ -1,13 +1,20 @@
 {
   "name": "grok-build-mcp",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260713025650",
+  "description": "MCP server bridging Codex to the local Grok Build CLI.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Reederey87/grok-build-codex-plugin.git",
+    "directory": "mcp-server"
+  },
   "type": "module",
   "private": true,
   "engines": {
     "node": ">=18.18"
   },
   "bin": {
-    "grok-build-mcp": "src/server.mjs"
+    "grok-build-mcp": "bin/grok-build-mcp"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

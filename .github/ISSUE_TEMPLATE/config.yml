@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Reederey87/grok-build-codex-plugin/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Support guide
+    url: https://github.com/Reederey87/grok-build-codex-plugin/blob/main/SUPPORT.md
+    about: Read the support and troubleshooting guidance before opening an issue.

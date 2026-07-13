@@ -13,6 +13,8 @@ const BOOLEAN_FLAGS = new Set([
   "all",
   "adversarial",
   "allow_api_fallback",
+  "external_disclosure_acknowledged",
+  "preview_only",
   "resume",
   "run_smoke_test"
 ]);
